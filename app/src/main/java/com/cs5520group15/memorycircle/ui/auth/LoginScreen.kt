@@ -40,6 +40,7 @@ fun LoginScreen(
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
 
     var passwordVisible by remember { mutableStateOf(false) }
+    var showForgotDialog by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
 
     // Collect one-shot events from ViewModel
@@ -196,7 +197,7 @@ fun LoginScreen(
 
             // Forgot password
             Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
-                TextButton(onClick = {}) {
+                TextButton(onClick = { showForgotDialog = true }) {
                     Text("Forgot password?", color = Brown, style = MaterialTheme.typography.bodyMedium)
                 }
             }
@@ -245,7 +246,86 @@ fun LoginScreen(
                 }
             }
         }
+
+        // Forgot-password dialog: enter an email and "receive" a reset link
+        if (showForgotDialog) {
+            ForgotPasswordDialog(
+                initialEmail = email,
+                onDismiss    = { showForgotDialog = false },
+                onSend       = { resetEmail ->
+                    viewModel.onForgotPassword(resetEmail)
+                    showForgotDialog = false
+                }
+            )
+        }
     }
+}
+
+/**
+ * What: Dialog where the user enters an email to receive a password reset link.
+ *       The "Send reset link" button is enabled only for a plausible email.
+ * Who: Shown by LoginScreen when the user taps "Forgot password?".
+ * When: While showForgotDialog is true.
+ */
+@Composable
+private fun ForgotPasswordDialog(
+    initialEmail: String,
+    onDismiss:    () -> Unit,
+    onSend:       (String) -> Unit
+) {
+    var resetEmail by remember { mutableStateOf(initialEmail) }
+    val isValidEmail = resetEmail.isNotBlank() && resetEmail.contains("@") && resetEmail.contains(".")
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor   = Cream,
+        title = {
+            Text("Reset password", style = MaterialTheme.typography.titleLarge, color = Ink)
+        },
+        text = {
+            Column {
+                Text(
+                    "Enter your email and we'll send you a link to reset your password.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = InkTertiary
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedTextField(
+                    value         = resetEmail,
+                    onValueChange = { resetEmail = it },
+                    modifier      = Modifier.fillMaxWidth(),
+                    shape         = RoundedCornerShape(16.dp),
+                    singleLine    = true,
+                    placeholder   = { Text("sarah@example.com", color = Brown.copy(alpha = 0.6f)) },
+                    leadingIcon   = {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_email),
+                            contentDescription = null,
+                            tint = Brown
+                        )
+                    },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor   = Sage,
+                        unfocusedBorderColor = Beige
+                    )
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onSend(resetEmail) },
+                enabled = isValidEmail
+            ) {
+                Text("Send reset link", color = if (isValidEmail) AccentGreen else BrownDisabled)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel", color = Brown)
+            }
+        }
+    )
 }
 
 @Preview(showBackground = true)

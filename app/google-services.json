@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "518166628579",
+    "project_id": "cs5520-group15-memorycircle",
+    "storage_bucket": "cs5520-group15-memorycircle.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:518166628579:android:5c58110b9136544b7c1dd6",
+        "android_client_info": {
+          "package_name": "com.cs5520group15.memorycircle"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCHr2r4YDVH0k_AzrQU6VoSktRRjbQFYbs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

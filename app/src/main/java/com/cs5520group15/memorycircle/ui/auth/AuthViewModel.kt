@@ -2,6 +2,8 @@ package com.cs5520group15.memorycircle.ui.auth
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.cs5520group15.memorycircle.common.AuthRepository
+import com.cs5520group15.memorycircle.common.Result
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -82,11 +84,54 @@ class AuthViewModel : ViewModel() {
             _events.send(AuthEvent.ShowSnackbar("Please fill in all fields"))
             return@launch
         }
-        // Simulate login success (Firebase will replace this later)
+        // Real Firebase login via AuthRepository
         _isLoading.value = true
-        kotlinx.coroutines.delay(500)
-        _isLoading.value = false
-        _events.send(AuthEvent.NavigateToHome)
+        when (val result = AuthRepository.login(_email.value.trim(), _password.value)) {
+            is Result.Loading -> { /* repository returns terminal states; nothing to do */ }
+            is Result.Success -> {
+                _isLoading.value = false
+                _events.send(AuthEvent.NavigateToHome)
+            }
+            is Result.Error -> {
+                _isLoading.value = false
+                _events.send(AuthEvent.ShowSnackbar(result.message))
+            }
+        }
+    }
+
+    /**
+     * What: Sends a real Firebase password reset link to the given email.
+     *       Shows a Snackbar confirming success or reporting the error.
+     * Who: Called by LoginScreen's "Forgot password?" dialog.
+     * When: On tapping "Send reset link".
+     */
+    fun onForgotPassword(email: String) = viewModelScope.launch {
+        if (email.isBlank()) {
+            _events.send(AuthEvent.ShowSnackbar("Please enter your email"))
+            return@launch
+        }
+        sendPasswordReset(email.trim())
+    }
+
+    /**
+     * What: Calls AuthRepository.sendPasswordReset() and reports the outcome
+     *       via a Snackbar.
+     * Who: Used by onForgotPassword (and any caller needing a password reset).
+     * When: On request to send a password reset email.
+     */
+    fun sendPasswordReset(email: String) = viewModelScope.launch {
+        _isLoading.value = true
+        when (val result = AuthRepository.sendPasswordReset(email)) {
+            is Result.Loading -> { /* repository returns terminal states; nothing to do */ }
+            is Result.Success -> {
+                _isLoading.value = false
+                _events.send(AuthEvent.ShowSnackbar("Password reset link sent to $email"))
+            }
+            is Result.Error -> {
+                _isLoading.value = false
+                _events.send(AuthEvent.ShowSnackbar(result.message))
+            }
+        }
     }
 
     /**
@@ -100,9 +145,22 @@ class AuthViewModel : ViewModel() {
             _events.send(AuthEvent.ShowSnackbar("Please fill in all fields"))
             return@launch
         }
+        // Real Firebase registration via AuthRepository
         _isLoading.value = true
-        kotlinx.coroutines.delay(500)
-        _isLoading.value = false
-        _events.send(AuthEvent.NavigateToHome)
+        when (val result = AuthRepository.register(
+            _name.value.trim(),
+            _email.value.trim(),
+            _password.value
+        )) {
+            is Result.Loading -> { /* repository returns terminal states; nothing to do */ }
+            is Result.Success -> {
+                _isLoading.value = false
+                _events.send(AuthEvent.NavigateToHome)
+            }
+            is Result.Error -> {
+                _isLoading.value = false
+                _events.send(AuthEvent.ShowSnackbar(result.message))
+            }
+        }
     }
 }

@@ -2,6 +2,7 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
     id("org.jetbrains.kotlin.plugin.serialization") version "2.1.0"
+    id("com.google.gms.google-services")
 }
 
 android {
@@ -60,4 +61,11 @@ dependencies {
 
 // Pager (HorizontalPager)
     implementation("androidx.compose.foundation:foundation:1.7.0")
+    // Firebase BoM
+    implementation(platform("com.google.firebase:firebase-bom:34.14.1"))
+
+// three Firebase services
+    implementation("com.google.firebase:firebase-auth")
+    implementation("com.google.firebase:firebase-firestore")
+    implementation("com.google.firebase:firebase-storage")
 }

@@ -1,9 +1,13 @@
 package com.cs5520group15.memorycircle.ui.home
 
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.cs5520group15.memorycircle.common.AuthRepository
+import com.cs5520group15.memorycircle.common.Result
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 
 /**
  * What: Holds all UI state for the Home screen.
@@ -30,7 +34,7 @@ class HomeViewModel : ViewModel() {
 
     // Private mutable state — only ViewModel can change
     private val _groups = MutableStateFlow<List<Group>>(emptyList())
-    private val _userName = MutableStateFlow("Sarah")
+    private val _userName = MutableStateFlow("")
 
     // Public read-only state — UI observes these
     val groups:    StateFlow<List<Group>> = _groups.asStateFlow()
@@ -40,6 +44,21 @@ class HomeViewModel : ViewModel() {
     // Firebase will replace this in a later phase
     init {
         loadDummyGroups()
+        loadUserName()
+    }
+
+    /**
+     * What: Reads the current user's name from Firebase via AuthRepository
+     *       and publishes it to userName.
+     * Who: Called automatically in the init block.
+     * When: Once when the ViewModel is first created.
+     */
+    private fun loadUserName() = viewModelScope.launch {
+        when (val result = AuthRepository.getCurrentUserName()) {
+            is Result.Loading -> { /* repository returns terminal states; nothing to do */ }
+            is Result.Success -> _userName.value = result.data
+            is Result.Error   -> { /* keep blank on failure */ }
+        }
     }
 
     /**
