@@ -89,7 +89,7 @@ fun ScrapbookViewerScreen(
                 TimelineEntry(
                     entry         = entry,
                     onSaveTitle   = { title -> viewModel.updateEntryTitle(entry.id, title) },
-                    onPostComment = { text -> viewModel.addComment(entry.id, author = CurrentUser.name, text = text) },
+                    onPostComment = { text -> viewModel.addComment(entry.id, author = "", text = text) },
                     onJoin        = { onJoinEntry(entry.id) }
                 )
             }

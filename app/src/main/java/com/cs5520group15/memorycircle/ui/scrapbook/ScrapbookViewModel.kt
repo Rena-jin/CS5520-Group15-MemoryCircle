@@ -1,9 +1,11 @@
 package com.cs5520group15.memorycircle.ui.scrapbook
 
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 
 /**
  * What: Holds the UI state for the scrapbook creation screen, which serves two
@@ -84,22 +86,29 @@ class ScrapbookViewModel : ViewModel() {
      */
     fun save(groupId: String, today: String) {
         val photo = _selectedPhotoUri.value ?: return
+        // memberName is resolved to the real current user inside the repository.
         val contribution = MemberContribution(
-            memberName  = CurrentUser.name,
+            memberName  = "",
             photoUri    = photo,
             description = _description.value.trim()
         )
         val joinId = joinEntryId
-        if (joinId != null) {
-            ScrapbookRepository.addContribution(groupId, joinId, contribution)
-        } else {
-            ScrapbookRepository.addEntry(
-                groupId           = groupId,
-                date              = today,
-                title             = _title.value.trim(),
-                tags              = _tags.value,
-                firstContribution = contribution
-            )
+        viewModelScope.launch {
+            try {
+                if (joinId != null) {
+                    ScrapbookRepository.addContribution(groupId, joinId, contribution)
+                } else {
+                    ScrapbookRepository.addEntry(
+                        groupId           = groupId,
+                        date              = today,
+                        title             = _title.value.trim(),
+                        tags              = _tags.value,
+                        firstContribution = contribution
+                    )
+                }
+            } catch (e: Exception) {
+                // Save failed; the form stays as-is for now.
+            }
         }
     }
 }
