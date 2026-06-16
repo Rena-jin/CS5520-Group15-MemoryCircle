@@ -3,7 +3,8 @@ package com.cs5520group15.memorycircle.ui.scrapbook
 import com.cs5520group15.memorycircle.common.AuthRepository
 import com.cs5520group15.memorycircle.common.FirebaseModule
 import com.cs5520group15.memorycircle.common.Result
-import com.google.firebase.firestore.DocumentReference
+import com.google.firebase.Timestamp
+import com.google.firebase.firestore.CollectionReference
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.ListenerRegistration
@@ -17,28 +18,30 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import java.text.SimpleDateFormat
+import java.time.YearMonth
 import java.util.Locale
+import java.util.UUID
 
 /**
  * What: Firestore-backed store for every group's scrapbook timeline. The viewer and
- *       the creation screen read and write through this single source of truth, so a
- *       time point created on one screen shows up on the other. A real-time snapshot
+ *       creation screens read and write through this single source of truth, so a
+ *       post created on one screen shows up on the other. A real-time snapshot
  *       listener keeps each group's StateFlow in sync with Firestore.
  * Who: Used by ScrapbookViewerViewModel and ScrapbookViewModel (and the screens,
  *      which collect entriesFor(...) directly).
  * When: Accessed whenever a timeline is shown, created, or edited.
  *
- * Firestore layout:
- *   groups/{groupId}/entries/{entryId}
- *     entryId, date (Timestamp), title, tags (List<String>), createdAt (Timestamp)
- *   groups/{groupId}/entries/{entryId}/contributions/{contributionId}
- *     contributionId, memberName, photoUrl, description, createdAt (Timestamp)
- *   groups/{groupId}/entries/{entryId}/comments/{commentId}
+ * Firestore layout (one scrapbook per group per month, id = "YYYY-MM"):
+ *   groups/{groupId}/scrapbooks/{scrapbookId}/posts/{postId}
+ *     postId, authorId, authorName, title, date (Timestamp), tags (List<String>),
+ *     photos (List<Map> of { photoId, url, storagePath, description, uploaderId,
+ *     uploadedAt }), commentCount (Int), createdAt (Timestamp)
+ *   groups/{groupId}/scrapbooks/{scrapbookId}/posts/{postId}/comments/{commentId}
  *     commentId, author, text, createdAt (Timestamp)
  *
- * Note: contributions/comments live in subcollections, so the entries listener does
- *       not fire when they change — writes to those subcollections refresh the group
- *       explicitly. Photos use picsum.photos placeholders until Storage is wired up.
+ * Note: the scrapbookId is computed from the current month internally, so the UI
+ *       (which only knows the groupId) needs no changes. Photos use picsum.photos
+ *       placeholders until Firebase Storage is wired up.
  */
 object ScrapbookRepository {
 
@@ -49,19 +52,28 @@ object ScrapbookRepository {
     // UI-triggered writes are launched from the ViewModels' viewModelScope instead.
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
-    // groupId -> that group's timeline entries (the StateFlow the screens collect).
+    // groupId -> that group's timeline posts (the StateFlow the screens collect).
     private val flows = mutableMapOf<String, MutableStateFlow<List<ScrapbookEntry>>>()
 
-    // groupId -> the active entries snapshot listener for that group.
+    // groupId -> the active posts snapshot listener for that group.
     private val listeners = mutableMapOf<String, ListenerRegistration>()
 
     // Formats the stored `date` Timestamp back into the "June 1" day label the UI shows.
     private val dayLabel = SimpleDateFormat("MMMM d", Locale.ENGLISH)
 
+    /** The current month's scrapbook id, e.g. "2026-06". */
+    private fun currentScrapbookId(): String = YearMonth.now().toString()
+
+    /** posts collection for a group's scrapbook. */
+    private fun postsRef(groupId: String, scrapbookId: String): CollectionReference =
+        db.collection("groups").document(groupId)
+            .collection("scrapbooks").document(scrapbookId)
+            .collection("posts")
+
     /**
      * What: Returns the live timeline flow for a group, attaching a Firestore snapshot
-     *       listener on first use.
-     * Who: Called by the ViewModels and screens to observe entries.
+     *       listener on the current month's posts on first use.
+     * Who: Called by the ViewModels and screens to observe posts.
      * When: On screen load.
      */
     fun entriesFor(groupId: String): StateFlow<List<ScrapbookEntry>> = flow(groupId).asStateFlow()
@@ -70,21 +82,20 @@ object ScrapbookRepository {
         flows[groupId]?.let { return it }
         val f = MutableStateFlow<List<ScrapbookEntry>>(emptyList())
         flows[groupId] = f          // store before listening so the callback finds it
-        startListening(groupId)
+        startListening(groupId, currentScrapbookId())
         return f
     }
 
     /**
-     * What: Attaches a real-time snapshot listener on groups/{groupId}/entries ordered
-     *       by date descending, re-assembling each entry with its contributions and
-     *       comments subcollections and publishing to the group's StateFlow.
+     * What: Attaches a real-time snapshot listener on the current month's posts,
+     *       ordered by date descending, re-assembling each post with its comments
+     *       subcollection and publishing to the group's StateFlow.
      * Who: Called by flow() the first time a group is observed.
      * When: Once per group, until detach()/detachAll() removes the listener.
      */
-    private fun startListening(groupId: String) {
+    private fun startListening(groupId: String, scrapbookId: String) {
         if (listeners.containsKey(groupId)) return
-        val registration = db.collection("groups").document(groupId)
-            .collection("entries")
+        val registration = postsRef(groupId, scrapbookId)
             .orderBy("date", Query.Direction.DESCENDING)
             .addSnapshotListener { snapshot, error ->
                 if (error != null || snapshot == null) return@addSnapshotListener
@@ -101,26 +112,25 @@ object ScrapbookRepository {
     }
 
     /**
-     * What: Builds the full ScrapbookEntry list for a set of entry documents, fetching
-     *       each entry's contributions and comments subcollections.
+     * What: Builds the ScrapbookEntry list for a set of post documents, fetching each
+     *       post's comments subcollection. Photos are read from the post's photos field.
      * Who: Used by the snapshot listener and by refreshGroup().
      */
-    private suspend fun assemble(entryDocs: List<DocumentSnapshot>): List<ScrapbookEntry> {
-        return entryDocs.map { doc ->
-            val entryRef = doc.reference
+    private suspend fun assemble(postDocs: List<DocumentSnapshot>): List<ScrapbookEntry> {
+        return postDocs.map { doc ->
+            val photos = (doc.get("photos") as? List<*>).orEmpty()
+                .filterIsInstance<Map<*, *>>()
+                .map { m ->
+                    Photo(
+                        photoId     = m["photoId"] as? String ?: "",
+                        url         = m["url"] as? String ?: "",
+                        storagePath = m["storagePath"] as? String ?: "",
+                        description = m["description"] as? String ?: "",
+                        uploaderId  = m["uploaderId"] as? String ?: ""
+                    )
+                }
 
-            val contributionsSnap = entryRef.collection("contributions")
-                .orderBy("createdAt", Query.Direction.ASCENDING)
-                .get().await()
-            val contributions = contributionsSnap.documents.map { c ->
-                MemberContribution(
-                    memberName  = c.getString("memberName") ?: "",
-                    photoUri    = c.getString("photoUrl") ?: "",
-                    description = c.getString("description") ?: ""
-                )
-            }
-
-            val commentsSnap = entryRef.collection("comments")
+            val commentsSnap = doc.reference.collection("comments")
                 .orderBy("createdAt", Query.Direction.ASCENDING)
                 .get().await()
             val comments = commentsSnap.documents.map { cm ->
@@ -134,120 +144,118 @@ object ScrapbookRepository {
             val dateLabel = doc.getTimestamp("date")?.toDate()?.let { dayLabel.format(it) } ?: ""
 
             ScrapbookEntry(
-                id            = doc.id,
-                date          = dateLabel,
-                title         = doc.getString("title") ?: "",
-                tags          = (doc.get("tags") as? List<*>)?.filterIsInstance<String>() ?: emptyList(),
-                contributions = contributions,
-                comments      = comments
+                id           = doc.id,
+                authorId     = doc.getString("authorId") ?: "",
+                authorName   = doc.getString("authorName") ?: "",
+                title        = doc.getString("title") ?: "",
+                date         = dateLabel,
+                tags         = (doc.get("tags") as? List<*>)?.filterIsInstance<String>() ?: emptyList(),
+                photos       = photos,
+                comments     = comments,
+                commentCount = (doc.getLong("commentCount") ?: 0L).toInt()
             )
         }
     }
 
     /**
-     * What: One-shot re-fetch + re-assemble of a group's entries. Used after writes to
-     *       a subcollection (contributions/comments), which do not trigger the
-     *       entries-collection snapshot listener.
+     * What: One-shot re-fetch + re-assemble of a group's current-month posts. Used
+     *       after writes that the posts snapshot listener does not observe (a new
+     *       comment in a subcollection, or a photo appended to an existing post while
+     *       its server timestamp is still resolving).
      */
     private suspend fun refreshGroup(groupId: String) {
-        val snap = db.collection("groups").document(groupId)
-            .collection("entries")
+        val snap = postsRef(groupId, currentScrapbookId())
             .orderBy("date", Query.Direction.DESCENDING)
             .get().await()
         flows[groupId]?.value = assemble(snap.documents)
     }
 
     /**
-     * What: Creates a brand-new time point in Firestore (title + tags, dated now) and
-     *       writes the creator's first contribution.
-     * Who: Called by ScrapbookViewModel when the "+" (new time point) flow saves.
-     * When: On save in new-entry mode.
+     * What: Adds a memory post. With joinPostId == null this creates a brand-new post
+     *       (title + tags + the author's first photo). With joinPostId set it appends a
+     *       photo to that existing post's photos field — the old "join a card" flow,
+     *       now that photos are a list on the post rather than a subcollection.
+     * Who: Called by ScrapbookViewModel when the creation screen saves.
+     * When: On save (new-post or join mode).
      */
-    suspend fun addEntry(
-        groupId:           String,
-        date:              String,
-        title:             String,
-        tags:              List<String>,
-        firstContribution: MemberContribution
+    suspend fun addPost(
+        groupId:     String,
+        title:       String,
+        tags:        List<String>,
+        description: String,
+        joinPostId:  String? = null
     ) {
-        val entryRef = db.collection("groups").document(groupId)
-            .collection("entries").document()
-        val entryDoc = mapOf(
-            "entryId"   to entryRef.id,
-            "date"      to FieldValue.serverTimestamp(),
-            "title"     to title,
-            "tags"      to tags,
-            "createdAt" to FieldValue.serverTimestamp()
-        )
-        entryRef.set(entryDoc).await()
-        writeContribution(entryRef, firstContribution)
+        val scrapbookId = currentScrapbookId()
+        val uid  = AuthRepository.currentUid ?: ""
+        val name = currentUserName()
+
+        if (joinPostId == null) {
+            // Create a new post with its first photo.
+            val postRef = postsRef(groupId, scrapbookId).document()
+            val postId  = postRef.id
+            val photo = photoMap(
+                seed        = postId,
+                description = description,
+                uploaderId  = uid
+            )
+            val postDoc = mapOf(
+                "postId"       to postId,
+                "authorId"     to uid,
+                "authorName"   to name,
+                "title"        to title,
+                "date"         to FieldValue.serverTimestamp(),
+                "tags"         to tags,
+                "photos"       to listOf(photo),
+                "commentCount" to 0,
+                "createdAt"    to FieldValue.serverTimestamp()
+            )
+            postRef.set(postDoc).await()
+        } else {
+            // Append this member's photo to an existing post.
+            val postRef = postsRef(groupId, scrapbookId).document(joinPostId)
+            val photo = photoMap(
+                seed        = UUID.randomUUID().toString(),
+                description = description,
+                uploaderId  = uid
+            )
+            postRef.update("photos", FieldValue.arrayUnion(photo)).await()
+        }
         refreshGroup(groupId)
     }
 
     /**
-     * What: Appends a member's contribution (photo + description) to an existing time
-     *       point — the "join an existing card" flow. The author name comes from the
-     *       real current user; the photo is a picsum placeholder for now.
-     * Who: Called by ScrapbookViewModel when the join flow saves.
-     * When: On save in join mode.
-     */
-    suspend fun addContribution(groupId: String, entryId: String, contribution: MemberContribution) {
-        val entryRef = db.collection("groups").document(groupId)
-            .collection("entries").document(entryId)
-        writeContribution(entryRef, contribution)
-        refreshGroup(groupId)
-    }
-
-    /**
-     * What: Writes a single contribution under an entry. memberName is the real
-     *       current user's name; photoUrl is a stable picsum placeholder (no Storage yet).
-     */
-    private suspend fun writeContribution(entryRef: DocumentReference, contribution: MemberContribution) {
-        val contribRef = entryRef.collection("contributions").document()
-        val doc = mapOf(
-            "contributionId" to contribRef.id,
-            "memberName"     to currentUserName(),
-            "photoUrl"       to placeholderPhoto(contribRef.id),
-            "description"    to contribution.description,
-            "createdAt"      to FieldValue.serverTimestamp()
-        )
-        contribRef.set(doc).await()
-    }
-
-    /**
-     * What: Looks up a single entry from the in-memory cache (used by the join flow to
+     * What: Looks up a single post from the in-memory cache (used by the join flow to
      *       pre-fill title/tags). Reads the latest value published by the listener.
      * Who: Called by ScrapbookViewModel.loadIfNeeded.
-     * When: When opening the creation screen to join an existing time point.
+     * When: When opening the creation screen to join an existing post.
      */
     fun entry(groupId: String, entryId: String): ScrapbookEntry? =
         flows[groupId]?.value?.firstOrNull { it.id == entryId }
 
     /**
-     * What: Updates an entry's title (any member can edit). Blank input is a no-op,
+     * What: Updates a post's title (any member can edit). Blank input is a no-op,
      *       leaving the existing title in place.
      * Who: Called by ScrapbookViewerViewModel on inline title edit.
      * When: On tapping "Done" in edit mode.
      */
     suspend fun updateTitle(groupId: String, entryId: String, title: String) {
         val newTitle = title.ifBlank { return }
-        db.collection("groups").document(groupId)
-            .collection("entries").document(entryId)
+        postsRef(groupId, currentScrapbookId()).document(entryId)
             .update("title", newTitle).await()
-        // The entries listener re-fires on this update and republishes automatically.
+        // The posts listener re-fires on this update and republishes automatically.
     }
 
     /**
-     * What: Appends a member's comment to an entry. Blank comments are ignored; the
-     *       author is the real current user, not a hardcoded value.
+     * What: Appends a member's comment to a post and bumps its commentCount. Blank
+     *       comments are ignored; the author is the real current user, not a passed-in
+     *       value.
      * Who: Called by ScrapbookViewerViewModel when a member posts a comment.
      * When: On tapping "Post".
      */
     suspend fun addComment(groupId: String, entryId: String, author: String, text: String) {
         if (text.isBlank()) return
-        val commentRef = db.collection("groups").document(groupId)
-            .collection("entries").document(entryId)
-            .collection("comments").document()
+        val postRef = postsRef(groupId, currentScrapbookId()).document(entryId)
+        val commentRef = postRef.collection("comments").document()
         val doc = mapOf(
             "commentId" to commentRef.id,
             "author"    to currentUserName(),
@@ -255,6 +263,7 @@ object ScrapbookRepository {
             "createdAt" to FieldValue.serverTimestamp()
         )
         commentRef.set(doc).await()
+        postRef.update("commentCount", FieldValue.increment(1)).await()
         refreshGroup(groupId)
     }
 
@@ -276,6 +285,21 @@ object ScrapbookRepository {
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────────
+
+    /**
+     * Builds a photo map for the post's photos array. Uses a picsum placeholder URL
+     * (no Storage yet) and a concrete Timestamp — serverTimestamp() is not allowed
+     * inside array elements.
+     */
+    private fun photoMap(seed: String, description: String, uploaderId: String): Map<String, Any> =
+        mapOf(
+            "photoId"     to UUID.randomUUID().toString(),
+            "url"         to placeholderPhoto(seed),
+            "storagePath" to "",
+            "description" to description,
+            "uploaderId"  to uploaderId,
+            "uploadedAt"  to Timestamp.now()
+        )
 
     /** The real current user's display name, falling back to "User". */
     private suspend fun currentUserName(): String =

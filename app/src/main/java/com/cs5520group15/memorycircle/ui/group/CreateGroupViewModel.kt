@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
+import java.time.YearMonth
 
 /**
  * What: Holds UI state and business logic for the "create a new group" flow.
@@ -102,6 +103,18 @@ class CreateGroupViewModel : ViewModel() {
                 "joinedAt" to FieldValue.serverTimestamp()
             )
             groupRef.collection("members").document(uid).set(memberDoc).await()
+
+            // Step 3: create the initial scrapbook for the current month so the
+            // group's timeline has a place for posts immediately.
+            val scrapbookId = YearMonth.now().toString()   // e.g. "2026-06"
+            val scrapbookDoc = mapOf(
+                "scrapbookId" to scrapbookId,
+                "postCount"   to 0,
+                "createdAt"   to FieldValue.serverTimestamp(),
+                "updatedAt"   to FieldValue.serverTimestamp()
+            )
+            groupRef.collection("scrapbooks").document(scrapbookId)
+                .set(scrapbookDoc).await()
 
             _isLoading.value = false
             _events.send(CreateGroupEvent.NavigateBack)

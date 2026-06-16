@@ -85,27 +85,22 @@ class ScrapbookViewModel : ViewModel() {
      * When: On save, only when canSave is true.
      */
     fun save(groupId: String, today: String) {
-        val photo = _selectedPhotoUri.value ?: return
-        // memberName is resolved to the real current user inside the repository.
-        val contribution = MemberContribution(
-            memberName  = "",
-            photoUri    = photo,
-            description = _description.value.trim()
-        )
+        // A photo must have been picked (canSave guards this too).
+        if (_selectedPhotoUri.value == null) return
+        // Author + photo URL are resolved inside the repository; the picked URI is a
+        // placeholder for now (no Storage yet). `today` is unused — the post date is a
+        // server timestamp — but kept so the screen's save(groupId, today) call is unchanged.
+        val description = _description.value.trim()
         val joinId = joinEntryId
         viewModelScope.launch {
             try {
-                if (joinId != null) {
-                    ScrapbookRepository.addContribution(groupId, joinId, contribution)
-                } else {
-                    ScrapbookRepository.addEntry(
-                        groupId           = groupId,
-                        date              = today,
-                        title             = _title.value.trim(),
-                        tags              = _tags.value,
-                        firstContribution = contribution
-                    )
-                }
+                ScrapbookRepository.addPost(
+                    groupId     = groupId,
+                    title       = _title.value.trim(),
+                    tags        = _tags.value,
+                    description = description,
+                    joinPostId  = joinId
+                )
             } catch (e: Exception) {
                 // Save failed; the form stays as-is for now.
             }
