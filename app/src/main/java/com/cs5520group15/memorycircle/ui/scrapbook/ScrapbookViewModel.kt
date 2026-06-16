@@ -2,10 +2,15 @@ package com.cs5520group15.memorycircle.ui.scrapbook
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.cs5520group15.memorycircle.common.FirebaseModule
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
+import java.time.LocalDate
+import java.time.YearMonth
+import java.time.ZoneId
 
 /**
  * What: Holds the UI state for the scrapbook creation screen, which serves two
@@ -22,11 +27,15 @@ class ScrapbookViewModel : ViewModel() {
     private val _description      = MutableStateFlow("")
     private val _tags             = MutableStateFlow<List<String>>(emptyList())
     private val _selectedPhotoUri = MutableStateFlow<String?>(null)
+    private val _selectedDate     = MutableStateFlow(LocalDate.now())
+    private val _takenDates       = MutableStateFlow<Set<LocalDate>>(emptySet())
 
-    val title:            StateFlow<String>       = _title.asStateFlow()
-    val description:      StateFlow<String>       = _description.asStateFlow()
-    val tags:             StateFlow<List<String>> = _tags.asStateFlow()
-    val selectedPhotoUri: StateFlow<String?>      = _selectedPhotoUri.asStateFlow()
+    val title:            StateFlow<String>        = _title.asStateFlow()
+    val description:      StateFlow<String>        = _description.asStateFlow()
+    val tags:             StateFlow<List<String>>  = _tags.asStateFlow()
+    val selectedPhotoUri: StateFlow<String?>       = _selectedPhotoUri.asStateFlow()
+    val selectedDate:     StateFlow<LocalDate>     = _selectedDate.asStateFlow()
+    val takenDates:       StateFlow<Set<LocalDate>> = _takenDates.asStateFlow()
 
     // In join mode this is set; title + tags are then pre-filled and read-only.
     private var joinEntryId: String? = null
@@ -51,11 +60,38 @@ class ScrapbookViewModel : ViewModel() {
                 _tags.value  = existing.tags
             }
         }
+        loadTakenDates(groupId)
+    }
+
+    /**
+     * What: Loads the days in the current month that already have a post for this group,
+     *       so the date picker can gray them out. Queries the current month's posts and
+     *       maps each post's date Timestamp to a LocalDate.
+     * Who: Called by loadIfNeeded.
+     * When: Once per ViewModel, on first load.
+     */
+    private fun loadTakenDates(groupId: String) {
+        val scrapbookId = YearMonth.now().toString()   // current month, e.g. "2026-06"
+        viewModelScope.launch {
+            try {
+                val snapshot = FirebaseModule.db.collection("groups").document(groupId)
+                    .collection("scrapbooks").document(scrapbookId)
+                    .collection("posts")
+                    .get().await()
+                val zone = ZoneId.systemDefault()
+                _takenDates.value = snapshot.documents.mapNotNull { doc ->
+                    doc.getTimestamp("date")?.toDate()?.toInstant()?.atZone(zone)?.toLocalDate()
+                }.toSet()
+            } catch (e: Exception) {
+                // Leave taken dates empty on failure.
+            }
+        }
     }
 
     fun onTitleChange(value: String)       { _title.value = value }
     fun onDescriptionChange(value: String) { _description.value = value }
     fun onPhotoSelected(uri: String)       { _selectedPhotoUri.value = uri }
+    fun onDateSelected(date: LocalDate)    { _selectedDate.value = date }
 
     /**
      * What: Adds a "#"-prefixed tag (new-entry mode only).
@@ -88,8 +124,9 @@ class ScrapbookViewModel : ViewModel() {
         // A photo must have been picked (canSave guards this too).
         if (_selectedPhotoUri.value == null) return
         // Author + photo URL are resolved inside the repository; the picked URI is a
-        // placeholder for now (no Storage yet). `today` is unused — the post date is a
-        // server timestamp — but kept so the screen's save(groupId, today) call is unchanged.
+        // placeholder for now (no Storage yet). The post date comes from _selectedDate;
+        // `today` (String) is unused but kept so the screen's save(groupId, today) call
+        // is unchanged.
         val description = _description.value.trim()
         val joinId = joinEntryId
         viewModelScope.launch {
@@ -99,6 +136,7 @@ class ScrapbookViewModel : ViewModel() {
                     title       = _title.value.trim(),
                     tags        = _tags.value,
                     description = description,
+                    date        = _selectedDate.value,
                     joinPostId  = joinId
                 )
             } catch (e: Exception) {

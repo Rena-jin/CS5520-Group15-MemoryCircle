@@ -21,6 +21,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import com.cs5520group15.memorycircle.R
+import com.cs5520group15.memorycircle.common.AuthRepository
 import com.cs5520group15.memorycircle.ui.common.AvatarCircle
 import com.cs5520group15.memorycircle.ui.common.MemoryCircleTopBar
 import com.cs5520group15.memorycircle.ui.theme.*
@@ -87,10 +88,11 @@ fun ScrapbookViewerScreen(
             // bottom padding so the timeline line stays continuous between entries.
             items(entries, key = { it.id }) { entry ->
                 TimelineEntry(
-                    entry         = entry,
-                    onSaveTitle   = { title -> viewModel.updateEntryTitle(entry.id, title) },
-                    onPostComment = { text -> viewModel.addComment(entry.id, author = "", text = text) },
-                    onJoin        = { onJoinEntry(entry.id) }
+                    entry             = entry,
+                    onSaveTitle       = { title -> viewModel.updateEntryTitle(entry.id, title) },
+                    onSaveDescription = { photoId, desc -> viewModel.updateDescription(entry.id, photoId, desc) },
+                    onPostComment     = { text -> viewModel.addComment(entry.id, author = "", text = text) },
+                    onJoin            = { onJoinEntry(entry.id) }
                 )
             }
         }
@@ -105,10 +107,11 @@ fun ScrapbookViewerScreen(
  */
 @Composable
 private fun TimelineEntry(
-    entry:         ScrapbookEntry,
-    onSaveTitle:   (String) -> Unit,
-    onPostComment: (String) -> Unit,
-    onJoin:        () -> Unit
+    entry:             ScrapbookEntry,
+    onSaveTitle:       (String) -> Unit,
+    onSaveDescription: (String, String) -> Unit,
+    onPostComment:     (String) -> Unit,
+    onJoin:            () -> Unit
 ) {
     Box(modifier = Modifier.fillMaxWidth()) {
 
@@ -153,11 +156,12 @@ private fun TimelineEntry(
             }
 
             MemoryCard(
-                entry         = entry,
-                onSaveTitle   = onSaveTitle,
-                onPostComment = onPostComment,
-                onJoin        = onJoin,
-                modifier      = Modifier
+                entry             = entry,
+                onSaveTitle       = onSaveTitle,
+                onSaveDescription = onSaveDescription,
+                onPostComment     = onPostComment,
+                onJoin            = onJoin,
+                modifier          = Modifier
                     .weight(1f)
                     .padding(start = 12.dp, bottom = 20.dp)
             )
@@ -174,11 +178,12 @@ private fun TimelineEntry(
  */
 @Composable
 private fun MemoryCard(
-    entry:         ScrapbookEntry,
-    onSaveTitle:   (String) -> Unit,
-    onPostComment: (String) -> Unit,
-    onJoin:        () -> Unit,
-    modifier:      Modifier = Modifier
+    entry:             ScrapbookEntry,
+    onSaveTitle:       (String) -> Unit,
+    onSaveDescription: (String, String) -> Unit,
+    onPostComment:     (String) -> Unit,
+    onJoin:            () -> Unit,
+    modifier:          Modifier = Modifier
 ) {
     var isEditing    by remember(entry.id) { mutableStateOf(false) }
     var titleInput   by remember(entry.id) { mutableStateOf(entry.title) }
@@ -261,10 +266,19 @@ private fun MemoryCard(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // Each member's contribution: photo + avatar + name + their own description
+            // Each member's contribution: photo + avatar + name + their own description.
+            // contributions are derived 1:1 (in order) from entry.photos, so the index
+            // gives us the matching photoId for saving description edits.
             Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                entry.contributions.forEach { contribution ->
-                    ContributionBlock(contribution)
+                entry.contributions.forEachIndexed { index, contribution ->
+                    val photoId = entry.photos.getOrNull(index)?.photoId ?: ""
+                    ContributionBlock(
+                        contribution      = contribution,
+                        isEditing         = isEditing,
+                        onSaveDescription = { newDescription ->
+                            onSaveDescription(photoId, newDescription)
+                        }
+                    )
                 }
             }
 
@@ -333,12 +347,32 @@ private fun MemoryCard(
 
 /**
  * What: One member's contribution — their photo above a row of their avatar, name,
- *       and their own description.
+ *       and their own description. When the card is in edit mode and this photo
+ *       belongs to the current user, the description becomes an editable field; the
+ *       edit is persisted when edit mode ends (the card's "✓ Done").
  * Who: Called by MemoryCard for each contribution on a time point.
  * When: Rendered for every member who has joined the time point.
  */
 @Composable
-private fun ContributionBlock(contribution: MemberContribution) {
+private fun ContributionBlock(
+    contribution:      MemberContribution,
+    isEditing:         Boolean,
+    onSaveDescription: (String) -> Unit
+) {
+    val isMine = contribution.uploaderId.isNotBlank() &&
+        contribution.uploaderId == AuthRepository.currentUid
+    val canEdit = isEditing && isMine
+
+    // Local edit buffer, reset whenever the persisted description changes.
+    var descInput by remember(contribution.description) { mutableStateOf(contribution.description) }
+
+    // When edit mode ends, persist this photo's description if the user changed it.
+    LaunchedEffect(isEditing) {
+        if (!isEditing && isMine && descInput != contribution.description) {
+            onSaveDescription(descInput)
+        }
+    }
+
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         AsyncImage(
             model              = contribution.photoUri,
@@ -358,7 +392,19 @@ private fun ContributionBlock(contribution: MemberContribution) {
                     style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
                     color = Brown
                 )
-                if (contribution.description.isNotBlank()) {
+                if (canEdit) {
+                    OutlinedTextField(
+                        value         = descInput,
+                        onValueChange = { descInput = it },
+                        modifier      = Modifier.fillMaxWidth(),
+                        shape         = RoundedCornerShape(12.dp),
+                        placeholder   = { Text("Say something about your photo…", style = MaterialTheme.typography.bodyMedium) },
+                        colors        = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor   = Sage,
+                            unfocusedBorderColor = Beige
+                        )
+                    )
+                } else if (contribution.description.isNotBlank()) {
                     Text(
                         text  = contribution.description,
                         style = MaterialTheme.typography.bodyMedium,

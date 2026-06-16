@@ -7,6 +7,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -25,6 +27,7 @@ import coil.compose.AsyncImage
 import com.cs5520group15.memorycircle.ui.common.MemoryCircleTopBar
 import com.cs5520group15.memorycircle.ui.theme.*
 import java.time.LocalDate
+import java.time.YearMonth
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
@@ -49,10 +52,12 @@ fun ScrapbookScreen(
         viewModel.loadIfNeeded(groupId, entryId)
     }
 
-    val title       by viewModel.title.collectAsStateWithLifecycle()
-    val description by viewModel.description.collectAsStateWithLifecycle()
-    val tags        by viewModel.tags.collectAsStateWithLifecycle()
-    val photoUri    by viewModel.selectedPhotoUri.collectAsStateWithLifecycle()
+    val title        by viewModel.title.collectAsStateWithLifecycle()
+    val description  by viewModel.description.collectAsStateWithLifecycle()
+    val tags         by viewModel.tags.collectAsStateWithLifecycle()
+    val photoUri     by viewModel.selectedPhotoUri.collectAsStateWithLifecycle()
+    val selectedDate by viewModel.selectedDate.collectAsStateWithLifecycle()
+    val takenDates   by viewModel.takenDates.collectAsStateWithLifecycle()
 
     val isJoinMode = viewModel.isJoinMode
     val today = remember { LocalDate.now().format(DateTimeFormatter.ofPattern("MMMM d", Locale.ENGLISH)) }
@@ -89,15 +94,35 @@ fun ScrapbookScreen(
             verticalArrangement = Arrangement.spacedBy(24.dp)
         ) {
 
-            // --- Date (new entries are dated today; join inherits the existing day) ---
+            // --- Date (new entries pick a day in the current month; join inherits
+            //     the existing day). Days that already have a post are disabled. ---
             if (!isJoinMode) {
+                val currentMonth = remember { YearMonth.now() }
+                val dateListState = rememberLazyListState()
+                // On first show, scroll so today's (selected) chip is visible — with the
+                // previous day peeking on the left to hint that earlier days exist. The
+                // user can then swipe left/right to pick another day.
+                LaunchedEffect(Unit) {
+                    dateListState.scrollToItem((selectedDate.dayOfMonth - 2).coerceAtLeast(0))
+                }
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     SectionLabel("DATE")
-                    Text(
-                        text  = today,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = Brown
-                    )
+                    LazyRow(
+                        state                 = dateListState,
+                        modifier              = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(currentMonth.lengthOfMonth()) { index ->
+                            val day  = index + 1
+                            val date = currentMonth.atDay(day)
+                            DayChip(
+                                day      = day,
+                                selected = date == selectedDate,
+                                disabled = takenDates.contains(date),
+                                onClick  = { viewModel.onDateSelected(date) }
+                            )
+                        }
+                    }
                 }
             }
 
@@ -285,6 +310,52 @@ fun ScrapbookScreen(
 @Composable
 private fun SectionLabel(text: String) {
     Text(text = text, style = MaterialTheme.typography.labelSmall, color = InkSecondary)
+}
+
+/**
+ * What: A selectable day-number chip for the date picker. Highlighted when it is the
+ *       selected date; grayed out and untappable when that day already has a post.
+ * Who: Called by ScrapbookScreen's date row for each day of the current month.
+ * When: Rendered in new-entry mode.
+ */
+@Composable
+private fun DayChip(
+    day:      Int,
+    selected: Boolean,
+    disabled: Boolean,
+    onClick:  () -> Unit
+) {
+    val background = when {
+        selected -> Ink
+        disabled -> Beige
+        else     -> Cream
+    }
+    val textColor = when {
+        selected -> Cream
+        disabled -> InkTertiary
+        else     -> Ink
+    }
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+            .size(44.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(background)
+            .then(
+                if (!selected) Modifier.border(1.dp, Beige, RoundedCornerShape(12.dp))
+                else Modifier
+            )
+            .then(
+                if (!disabled) Modifier.clickable { onClick() }
+                else Modifier
+            )
+    ) {
+        Text(
+            text  = day.toString(),
+            style = MaterialTheme.typography.bodyMedium,
+            color = textColor
+        )
+    }
 }
 
 /**

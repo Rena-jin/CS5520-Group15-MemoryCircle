@@ -55,6 +55,22 @@ class ScrapbookViewerViewModel : ViewModel() {
         }
     }
 
+    /**
+     * What: Updates the description of one of the current user's own photos on a post.
+     * Who: Called by ScrapbookViewerScreen when a member saves a description edit.
+     * When: On tapping "Done" in edit mode, for any photo whose text changed.
+     */
+    fun updateDescription(entryId: String, photoId: String, description: String) {
+        val gid = groupId ?: return
+        viewModelScope.launch {
+            try {
+                ScrapbookRepository.updatePhotoDescription(gid, entryId, photoId, description)
+            } catch (e: Exception) {
+                // Persisted edit failed; keep the UI as-is for now.
+            }
+        }
+    }
+
     /** Detaches this group's Firestore snapshot listener when the viewer is destroyed. */
     override fun onCleared() {
         super.onCleared()

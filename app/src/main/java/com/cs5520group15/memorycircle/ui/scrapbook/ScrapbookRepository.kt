@@ -18,7 +18,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import java.text.SimpleDateFormat
+import java.time.LocalDate
 import java.time.YearMonth
+import java.time.ZoneId
 import java.util.Locale
 import java.util.UUID
 
@@ -172,9 +174,9 @@ object ScrapbookRepository {
 
     /**
      * What: Adds a memory post. With joinPostId == null this creates a brand-new post
-     *       (title + tags + the author's first photo). With joinPostId set it appends a
-     *       photo to that existing post's photos field — the old "join a card" flow,
-     *       now that photos are a list on the post rather than a subcollection.
+     *       (title + tags + the author's first photo) dated `date`. With joinPostId set
+     *       it appends a photo to that existing post's photos field — the old "join a
+     *       card" flow, now that photos are a list on the post rather than a subcollection.
      * Who: Called by ScrapbookViewModel when the creation screen saves.
      * When: On save (new-post or join mode).
      */
@@ -183,6 +185,7 @@ object ScrapbookRepository {
         title:       String,
         tags:        List<String>,
         description: String,
+        date:        LocalDate,
         joinPostId:  String? = null
     ) {
         val scrapbookId = currentScrapbookId()
@@ -190,7 +193,8 @@ object ScrapbookRepository {
         val name = currentUserName()
 
         if (joinPostId == null) {
-            // Create a new post with its first photo.
+            // Create a new post with its first photo, dated the user's chosen day.
+            val dateTimestamp = Timestamp(date.atStartOfDay(ZoneId.systemDefault()).toEpochSecond(), 0)
             val postRef = postsRef(groupId, scrapbookId).document()
             val postId  = postRef.id
             val photo = photoMap(
@@ -203,7 +207,7 @@ object ScrapbookRepository {
                 "authorId"     to uid,
                 "authorName"   to name,
                 "title"        to title,
-                "date"         to FieldValue.serverTimestamp(),
+                "date"         to dateTimestamp,
                 "tags"         to tags,
                 "photos"       to listOf(photo),
                 "commentCount" to 0,
@@ -242,6 +246,29 @@ object ScrapbookRepository {
         val newTitle = title.ifBlank { return }
         postsRef(groupId, currentScrapbookId()).document(entryId)
             .update("title", newTitle).await()
+        // The posts listener re-fires on this update and republishes automatically.
+    }
+
+    /**
+     * What: Updates the description of a single photo on a post. Reads the post's
+     *       current photos array, replaces the matching photo's description, and writes
+     *       the whole array back. Other photos are left untouched.
+     * Who: Called by ScrapbookViewerViewModel when a member edits their own photo's caption.
+     * When: On saving an inline description edit.
+     */
+    suspend fun updatePhotoDescription(groupId: String, entryId: String, photoId: String, description: String) {
+        val postRef = postsRef(groupId, currentScrapbookId()).document(entryId)
+        val snapshot = postRef.get().await()
+        @Suppress("UNCHECKED_CAST")
+        val photos = (snapshot.get("photos") as? List<Map<String, Any?>>).orEmpty()
+        val updated = photos.map { photo ->
+            if (photo["photoId"] == photoId) {
+                photo.toMutableMap().apply { this["description"] = description }
+            } else {
+                photo
+            }
+        }
+        postRef.update("photos", updated).await()
         // The posts listener re-fires on this update and republishes automatically.
     }
 

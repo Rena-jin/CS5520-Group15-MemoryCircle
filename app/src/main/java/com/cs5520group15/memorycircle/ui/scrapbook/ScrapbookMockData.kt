@@ -23,9 +23,10 @@ data class Photo(
  * When: Built on the fly from each post's photos for display.
  */
 data class MemberContribution(
-    val memberName:  String,   // drives avatar initial + label
-    val photoUri:    String,   // remote URL
-    val description: String     // this photo's caption
+    val memberName:  String,        // drives avatar initial + label
+    val photoUri:    String,        // remote URL
+    val description: String,        // this photo's caption
+    val uploaderId:  String = ""    // uid of whoever uploaded it — drives "is this mine?"
 )
 
 /**
@@ -56,7 +57,8 @@ data class ScrapbookEntry(
             MemberContribution(
                 memberName  = authorName,
                 photoUri    = photo.url,
-                description = photo.description
+                description = photo.description,
+                uploaderId  = photo.uploaderId
             )
         }
 }
