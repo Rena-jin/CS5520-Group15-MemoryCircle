@@ -3,7 +3,9 @@ package com.cs5520group15.memorycircle.ui.home
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.cs5520group15.memorycircle.common.AuthRepository
+import com.cs5520group15.memorycircle.common.FirebaseModule
 import com.cs5520group15.memorycircle.common.Result
+import com.google.firebase.firestore.ListenerRegistration
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -40,10 +42,13 @@ class HomeViewModel : ViewModel() {
     val groups:    StateFlow<List<Group>> = _groups.asStateFlow()
     val userName:  StateFlow<String>      = _userName.asStateFlow()
 
-    // Load dummy data when ViewModel is created
-    // Firebase will replace this in a later phase
+    // Holds the active Firestore snapshot listener so we can detach it
+    // in onCleared() and avoid leaking it past the ViewModel's lifecycle.
+    private var groupsListener: ListenerRegistration? = null
+
+    // Load real data when ViewModel is created
     init {
-        loadDummyGroups()
+        loadGroups()
         loadUserName()
     }
 
@@ -62,15 +67,45 @@ class HomeViewModel : ViewModel() {
     }
 
     /**
-     * What: Loads a hardcoded list of groups for UI skeleton demonstration.
+     * What: Subscribes to all Firestore groups whose memberIds array contains the
+     *       current user's uid, and republishes them to the groups StateFlow.
+     *       Uses a real-time snapshot listener, so the list updates automatically
+     *       whenever a group the user belongs to is added, changed, or removed.
      * Who: Called automatically in the init block.
-     * When: Once when the ViewModel is first created.
+     * When: Once when the ViewModel is first created; the listener then fires
+     *       on every server-side change until onCleared() detaches it.
      */
-    private fun loadDummyGroups() {
-        _groups.value = listOf(
-            Group("1", "Group 1", "4 members", 12, "brown"),
-            Group("2", "Group 2", "3 members",  5, "sage"),
-            Group("3", "Group 3", "6 members",  8, "brown")
-        )
+    private fun loadGroups() {
+        val uid = AuthRepository.currentUid ?: ""
+        groupsListener = FirebaseModule.db.collection("groups")
+            .whereArrayContains("memberIds", uid)
+            .addSnapshotListener { snapshot, error ->
+                // On error or no data, leave the current list untouched.
+                if (error != null || snapshot == null) return@addSnapshotListener
+
+                _groups.value = snapshot.documents.map { doc ->
+                    val memberCount = (doc.getLong("memberCount") ?: 0L).toInt()
+                    Group(
+                        id          = doc.id,
+                        name        = doc.getString("name") ?: "",
+                        // Subtitle line: member summary (createdAt isn't reliably
+                        // available until the server timestamp resolves).
+                        date        = "$memberCount members",
+                        memoryCount = (doc.getLong("memoryCount") ?: 0L).toInt(),
+                        colorType   = doc.getString("colorType") ?: "brown"
+                    )
+                }
+            }
+    }
+
+    /**
+     * What: Detaches the Firestore snapshot listener when the ViewModel is destroyed.
+     * Who: Called by the framework when HomeScreen leaves the composition for good.
+     * When: On ViewModel teardown — prevents the listener from leaking.
+     */
+    override fun onCleared() {
+        super.onCleared()
+        groupsListener?.remove()
+        groupsListener = null
     }
 }
