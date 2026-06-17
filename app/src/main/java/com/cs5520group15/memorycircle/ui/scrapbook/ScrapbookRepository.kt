@@ -218,6 +218,14 @@ object ScrapbookRepository {
                 "createdAt"    to FieldValue.serverTimestamp()
             )
             postRef.set(postDoc).await()
+            // Increment postCount on the current scrapbook
+            db.collection("groups").document(groupId)
+                .collection("scrapbooks").document(scrapbookId)
+                .update("postCount", FieldValue.increment(1)).await()
+
+            // Increment memoryCount on the group
+            db.collection("groups").document(groupId)
+                .update("memoryCount", FieldValue.increment(1)).await()
         } else {
             // Append this member's photo to an existing post.
             val postRef = postsRef(groupId, scrapbookId).document(joinPostId)
