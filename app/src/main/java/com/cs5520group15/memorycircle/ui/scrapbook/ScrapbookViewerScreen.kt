@@ -55,7 +55,11 @@ fun ScrapbookViewerScreen(
         containerColor = Cream,
         topBar = {
             MemoryCircleTopBar(
-                title    = "June 2025",
+                title = remember {
+                    java.time.YearMonth.now().format(
+                        java.time.format.DateTimeFormatter.ofPattern("MMMM yyyy", java.util.Locale.ENGLISH)
+                    )
+                },
                 showBack = true,
                 onBack   = onBack,
                 actions  = {
