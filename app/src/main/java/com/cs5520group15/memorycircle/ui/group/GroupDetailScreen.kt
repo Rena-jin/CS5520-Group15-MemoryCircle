@@ -60,6 +60,7 @@ fun GroupDetailScreen(
     onOpenMemberProfile:  (String) -> Unit,
     onInviteMember:       () -> Unit,
     onOpenScrapbook:      (groupId: String, month: String, year: String) -> Unit,
+    onLeaveGroup:         () -> Unit = {},
     viewModel:            GroupDetailViewModel = viewModel()
 ) {
     LaunchedEffect(groupId) { viewModel.bind(groupId) }
@@ -138,9 +139,9 @@ fun GroupDetailScreen(
             groupName = groupName,
             onConfirm = {
                 showLeaveDialog = false
-                // Actual "leave group" wiring (call repo, pop back to Home) lands
-                // when the group repository / Firestore layer is in place.
-                onBack()
+                // Remove the user from the group in Firestore, then navigate away.
+                // Home's live query drops the group once memberIds no longer has the uid.
+                viewModel.leaveGroup(onLeft = onLeaveGroup)
             },
             onDismiss = { showLeaveDialog = false }
         )

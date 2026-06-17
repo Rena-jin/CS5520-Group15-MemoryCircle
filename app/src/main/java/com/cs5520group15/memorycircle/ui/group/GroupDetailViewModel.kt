@@ -1,9 +1,15 @@
 package com.cs5520group15.memorycircle.ui.group
 
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.cs5520group15.memorycircle.common.AuthRepository
+import com.cs5520group15.memorycircle.common.FirebaseModule
+import com.google.firebase.firestore.FieldValue
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
 
 /**
  * What: Holds the state shown on the group detail page — the group name, the
@@ -31,6 +37,8 @@ class GroupDetailViewModel : ViewModel() {
         val colorType:   String   // "brown" or "sage" — accent chip color
     )
 
+    private var groupId: String? = null
+
     private val _groupName = MutableStateFlow("")
     private val _members   = MutableStateFlow<List<Member>>(emptyList())
     private val _months    = MutableStateFlow<List<MonthScrapbook>>(emptyList())
@@ -47,9 +55,37 @@ class GroupDetailViewModel : ViewModel() {
      * When: On screen open, and again if groupId changes.
      */
     fun bind(groupId: String) {
+        this.groupId = groupId
         _groupName.value = mockGroupName(groupId)
         _members.value   = mockMembers(groupId)
         _months.value    = mockMonths(groupId)
+    }
+
+    /**
+     * What: Removes the current user from this group in Firestore — drops their uid
+     *       from the group's memberIds array, decrements memberCount, and deletes
+     *       their member document. Once memberIds no longer contains the uid, the
+     *       Home screen's live query drops the group automatically.
+     * Who: Called by GroupDetailScreen when the user confirms "Yes, leave".
+     * When: On leave-group confirmation.
+     * @param onLeft invoked (on success) so the screen can navigate away.
+     */
+    fun leaveGroup(onLeft: () -> Unit) {
+        val gid = groupId ?: return
+        val uid = AuthRepository.currentUid ?: return
+        viewModelScope.launch {
+            try {
+                val groupRef = FirebaseModule.db.collection("groups").document(gid)
+                groupRef.update(
+                    "memberIds",   FieldValue.arrayRemove(uid),
+                    "memberCount", FieldValue.increment(-1)
+                ).await()
+                groupRef.collection("members").document(uid).delete().await()
+                onLeft()
+            } catch (e: Exception) {
+                // Leaving failed; stay on the screen so the user can retry.
+            }
+        }
     }
 
     private fun mockGroupName(groupId: String): String = when (groupId) {

@@ -314,6 +314,11 @@ fun MemoryCircleNavigation() {
                 onOpenScrapbook     = { gid, month, year ->
                     // GroupDetail's per-month list shows PAST scrapbooks → read-only view.
                     navController.navigate(ScrapbookHistory(gid, month, year))
+                },
+                onLeaveGroup        = {
+                    // After leaving, return straight to Home (skipping the left
+                    // group's timeline), where the live query now omits the group.
+                    navController.popBackStack(Home, inclusive = false)
                 }
             )
         }
