@@ -1,5 +1,6 @@
 package com.cs5520group15.memorycircle.ui.scrapbook
 
+import android.net.Uri
 import com.cs5520group15.memorycircle.common.AuthRepository
 import com.cs5520group15.memorycircle.common.FirebaseModule
 import com.cs5520group15.memorycircle.common.Result
@@ -42,8 +43,8 @@ import java.util.UUID
  *     commentId, author, text, createdAt (Timestamp)
  *
  * Note: the scrapbookId is computed from the current month internally, so the UI
- *       (which only knows the groupId) needs no changes. Photos use picsum.photos
- *       placeholders until Firebase Storage is wired up.
+ *       (which only knows the groupId) needs no changes. Photos are uploaded to
+ *       Firebase Storage and referenced by their download URL.
  */
 object ScrapbookRepository {
 
@@ -181,12 +182,13 @@ object ScrapbookRepository {
      * When: On save (new-post or join mode).
      */
     suspend fun addPost(
-        groupId:     String,
-        title:       String,
-        tags:        List<String>,
-        description: String,
-        date:        LocalDate,
-        joinPostId:  String? = null
+        groupId:          String,
+        title:            String,
+        tags:             List<String>,
+        description:      String,
+        selectedPhotoUri: String,
+        date:             LocalDate,
+        joinPostId:       String? = null
     ) {
         val scrapbookId = currentScrapbookId()
         val uid  = AuthRepository.currentUid ?: ""
@@ -197,8 +199,10 @@ object ScrapbookRepository {
             val dateTimestamp = Timestamp(date.atStartOfDay(ZoneId.systemDefault()).toEpochSecond(), 0)
             val postRef = postsRef(groupId, scrapbookId).document()
             val postId  = postRef.id
+            val (url, storagePath) = uploadPhoto(selectedPhotoUri, groupId, postId)
             val photo = photoMap(
-                seed        = postId,
+                url         = url,
+                storagePath = storagePath,
                 description = description,
                 uploaderId  = uid
             )
@@ -217,8 +221,10 @@ object ScrapbookRepository {
         } else {
             // Append this member's photo to an existing post.
             val postRef = postsRef(groupId, scrapbookId).document(joinPostId)
+            val (url, storagePath) = uploadPhoto(selectedPhotoUri, groupId, joinPostId)
             val photo = photoMap(
-                seed        = UUID.randomUUID().toString(),
+                url         = url,
+                storagePath = storagePath,
                 description = description,
                 uploaderId  = uid
             )
@@ -314,15 +320,32 @@ object ScrapbookRepository {
     // ── Helpers ────────────────────────────────────────────────────────────────
 
     /**
-     * Builds a photo map for the post's photos array. Uses a picsum placeholder URL
-     * (no Storage yet) and a concrete Timestamp — serverTimestamp() is not allowed
-     * inside array elements.
+     * What: Uploads a locally-picked photo to Firebase Storage under the post's path
+     *       and returns its public download URL plus the storage path (kept for future
+     *       deletion).
+     * Who: Called by addPost when creating or joining a post.
+     * When: On save, before writing the photo entry to Firestore.
+     * @return Pair(downloadUrl, storagePath)
      */
-    private fun photoMap(seed: String, description: String, uploaderId: String): Map<String, Any> =
+    private suspend fun uploadPhoto(localUri: String, groupId: String, postId: String): Pair<String, String> {
+        val photoId = UUID.randomUUID().toString()
+        val path = "groups/$groupId/scrapbooks/${currentScrapbookId()}/posts/$postId/$photoId.jpg"
+        val ref = FirebaseModule.storage.reference.child(path)
+        ref.putFile(Uri.parse(localUri)).await()
+        val downloadUrl = ref.downloadUrl.await().toString()
+        return Pair(downloadUrl, path)
+    }
+
+    /**
+     * Builds a photo map for the post's photos array from a real upload. Uses a
+     * concrete Timestamp — serverTimestamp() is not allowed inside array elements.
+     * The photoId mirrors the uploaded file's name so it ties back to the storagePath.
+     */
+    private fun photoMap(url: String, storagePath: String, description: String, uploaderId: String): Map<String, Any> =
         mapOf(
-            "photoId"     to UUID.randomUUID().toString(),
-            "url"         to placeholderPhoto(seed),
-            "storagePath" to "",
+            "photoId"     to storagePath.substringAfterLast('/').removeSuffix(".jpg"),
+            "url"         to url,
+            "storagePath" to storagePath,
             "description" to description,
             "uploaderId"  to uploaderId,
             "uploadedAt"  to Timestamp.now()
@@ -334,8 +357,4 @@ object ScrapbookRepository {
             is Result.Success -> result.data
             else              -> "User"
         }
-
-    /** A stable picsum placeholder photo URL until Firebase Storage is wired up. */
-    private fun placeholderPhoto(seed: String): String =
-        "https://picsum.photos/seed/$seed/400/300"
 }

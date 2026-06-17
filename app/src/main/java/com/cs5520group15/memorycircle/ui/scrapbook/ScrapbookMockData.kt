@@ -9,7 +9,7 @@ package com.cs5520group15.memorycircle.ui.scrapbook
  */
 data class Photo(
     val photoId:     String,
-    val url:         String,   // remote URL (picsum placeholder until Storage exists)
+    val url:         String,   // Firebase Storage download URL
     val storagePath: String,   // Firebase Storage path — empty until Storage is wired up
     val description: String,   // this photo's caption
     val uploaderId:  String    // uid of whoever uploaded it

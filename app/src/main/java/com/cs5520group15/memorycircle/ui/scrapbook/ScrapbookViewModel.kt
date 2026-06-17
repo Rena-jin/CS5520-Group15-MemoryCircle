@@ -3,9 +3,11 @@ package com.cs5520group15.memorycircle.ui.scrapbook
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.cs5520group15.memorycircle.common.FirebaseModule
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import java.time.LocalDate
@@ -29,6 +31,7 @@ class ScrapbookViewModel : ViewModel() {
     private val _selectedPhotoUri = MutableStateFlow<String?>(null)
     private val _selectedDate     = MutableStateFlow(LocalDate.now())
     private val _takenDates       = MutableStateFlow<Set<LocalDate>>(emptySet())
+    private val _isSaving         = MutableStateFlow(false)
 
     val title:            StateFlow<String>        = _title.asStateFlow()
     val description:      StateFlow<String>        = _description.asStateFlow()
@@ -36,6 +39,16 @@ class ScrapbookViewModel : ViewModel() {
     val selectedPhotoUri: StateFlow<String?>       = _selectedPhotoUri.asStateFlow()
     val selectedDate:     StateFlow<LocalDate>     = _selectedDate.asStateFlow()
     val takenDates:       StateFlow<Set<LocalDate>> = _takenDates.asStateFlow()
+    val isSaving:         StateFlow<Boolean>       = _isSaving.asStateFlow()
+
+    // --- One-shot save outcome events (consumed once by the screen) ---
+    sealed class SaveEvent {
+        object Success : SaveEvent()
+        data class Error(val message: String) : SaveEvent()
+    }
+
+    private val _events = Channel<SaveEvent>(Channel.BUFFERED)
+    val events = _events.receiveAsFlow()
 
     // In join mode this is set; title + tags are then pre-filled and read-only.
     private var joinEntryId: String? = null
@@ -123,24 +136,33 @@ class ScrapbookViewModel : ViewModel() {
     fun save(groupId: String, today: String) {
         // A photo must have been picked (canSave guards this too).
         if (_selectedPhotoUri.value == null) return
-        // Author + photo URL are resolved inside the repository; the picked URI is a
-        // placeholder for now (no Storage yet). The post date comes from _selectedDate;
-        // `today` (String) is unused but kept so the screen's save(groupId, today) call
-        // is unchanged.
+        // Guard against double-taps while an upload is already in flight.
+        if (_isSaving.value) return
+        // The picked local URI is uploaded to Firebase Storage inside the repository.
+        // The post date comes from _selectedDate; `today` (String) is unused but kept so
+        // the screen's save(groupId, today) call is unchanged.
+        val photoUri    = _selectedPhotoUri.value!!
         val description = _description.value.trim()
         val joinId = joinEntryId
         viewModelScope.launch {
+            _isSaving.value = true
             try {
                 ScrapbookRepository.addPost(
-                    groupId     = groupId,
-                    title       = _title.value.trim(),
-                    tags        = _tags.value,
-                    description = description,
-                    date        = _selectedDate.value,
-                    joinPostId  = joinId
+                    groupId          = groupId,
+                    title            = _title.value.trim(),
+                    tags             = _tags.value,
+                    description      = description,
+                    selectedPhotoUri = photoUri,
+                    date             = _selectedDate.value,
+                    joinPostId       = joinId
                 )
+                _events.send(SaveEvent.Success)
             } catch (e: Exception) {
-                // Save failed; the form stays as-is for now.
+                _events.send(
+                    SaveEvent.Error(e.message ?: "Couldn't save your memory. Please try again.")
+                )
+            } finally {
+                _isSaving.value = false
             }
         }
     }

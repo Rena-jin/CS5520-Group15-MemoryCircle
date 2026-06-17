@@ -58,9 +58,22 @@ fun ScrapbookScreen(
     val photoUri     by viewModel.selectedPhotoUri.collectAsStateWithLifecycle()
     val selectedDate by viewModel.selectedDate.collectAsStateWithLifecycle()
     val takenDates   by viewModel.takenDates.collectAsStateWithLifecycle()
+    val isSaving     by viewModel.isSaving.collectAsStateWithLifecycle()
 
     val isJoinMode = viewModel.isJoinMode
     val today = remember { LocalDate.now().format(DateTimeFormatter.ofPattern("MMMM d", Locale.ENGLISH)) }
+
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    // Navigate back only after a successful save; surface failures as a snackbar.
+    LaunchedEffect(Unit) {
+        viewModel.events.collect { event ->
+            when (event) {
+                is ScrapbookViewModel.SaveEvent.Success -> onSaved()
+                is ScrapbookViewModel.SaveEvent.Error   -> snackbarHostState.showSnackbar(event.message)
+            }
+        }
+    }
 
     var newTagInput by remember { mutableStateOf("") }
     var showAddTag  by remember { mutableStateOf(false) }
@@ -77,6 +90,7 @@ fun ScrapbookScreen(
 
     Scaffold(
         containerColor = Cream,
+        snackbarHost   = { SnackbarHost(snackbarHostState) },
         topBar = {
             MemoryCircleTopBar(
                 title    = if (isJoinMode) "Add Your Photo" else "New Memory",
@@ -277,12 +291,11 @@ fun ScrapbookScreen(
             Spacer(modifier = Modifier.height(8.dp))
 
             // --- Save Button ---
+            // Saving uploads the photo, so it can take a moment: show a spinner and
+            // disable the button until the ViewModel reports success or failure.
             Button(
-                onClick  = {
-                    viewModel.save(groupId, today)
-                    onSaved()
-                },
-                enabled  = viewModel.canSave,
+                onClick  = { viewModel.save(groupId, today) },
+                enabled  = viewModel.canSave && !isSaving,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(56.dp),
@@ -292,10 +305,23 @@ fun ScrapbookScreen(
                     contentColor   = Cream
                 )
             ) {
-                Text(
-                    text  = if (isJoinMode) "✦  Add to Timeline" else "✦  Create Memory",
-                    style = MaterialTheme.typography.labelLarge
-                )
+                if (isSaving) {
+                    CircularProgressIndicator(
+                        color       = Cream,
+                        strokeWidth = 2.dp,
+                        modifier    = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text(
+                        text  = "Saving…",
+                        style = MaterialTheme.typography.labelLarge
+                    )
+                } else {
+                    Text(
+                        text  = if (isJoinMode) "✦  Add to Timeline" else "✦  Create Memory",
+                        style = MaterialTheme.typography.labelLarge
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(16.dp))
